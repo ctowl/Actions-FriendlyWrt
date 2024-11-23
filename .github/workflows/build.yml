@@ -1,5 +1,6 @@
 on:
   watch:
+    branches: [ "master" ]
     types: started
 jobs:
   prepare_release:
