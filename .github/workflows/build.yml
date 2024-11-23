@@ -1,5 +1,5 @@
 on:
-  watch:
+  pull:
     branches: [ "master" ]
     types: started
 jobs:
