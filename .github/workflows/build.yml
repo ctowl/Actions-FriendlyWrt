@@ -1,6 +1,13 @@
 on:
-  watch:
-    types: started
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "部署环境"
+        required: true
+        default: "staging"
+      reason:
+        description: "触发原因"
+        required: false
 jobs:
   prepare_release:
     runs-on: ubuntu-22.04
