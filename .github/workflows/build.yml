@@ -56,11 +56,12 @@ jobs:
           ~/toolchain
         key: ${{ steps.cache_key.outputs.key }}
       
-    - name: Install dependencies
+    - name: Install dependencies and repo tool
       if: steps.env_cache.outputs.cache-hit != 'true'
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        # 安装环境依赖
         sudo rm -rf /etc/apt/sources.list.d
         wget https://raw.githubusercontent.com/friendlyarm/build-env-on-ubuntu-bionic/master/install.sh
         sed -i -e 's/^apt-get -y install openjdk-8-jdk/# apt-get -y install openjdk-8-jdk/g' install.sh
@@ -68,10 +69,15 @@ jobs:
         sed -i -e 's/^(cat fa-toolchain/# (cat fa-toolchain/g' install.sh
         sed -i -e 's/^(tar xf fa-toolchain/# (tar xf fa-toolchain/g' install.sh
         sudo -E bash ./install.sh
+        
+        # 安装 repo 工具
+        git clone https://github.com/friendlyarm/repo
+        sudo cp repo/repo /usr/bin/
+        chmod +x /usr/bin/repo
+        repo --version  # 验证安装
+        
         sudo -E git config --global user.name 'GitHub Actions'
         sudo -E git config --global user.email 'noreply@github.com'
-        git clone https://github.com/friendlyarm/repo
-        sudo -E cp repo/repo /usr/bin/
         sudo swapoff -a
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk /usr/local/share/boost /opt/ghc
         echo "cores: $(nproc)"
@@ -82,8 +88,8 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
     strategy:
       matrix:
-        VERSION: ['24.10']  # 仅保留 24.10 版本
-        SET: [docker]  # 仅保留 docker 设置
+        VERSION: ['24.10']
+        SET: [docker]
       fail-fast: false
 
     steps:
@@ -98,7 +104,7 @@ jobs:
           ~/toolchain
         key: ${{ needs.setup_environment.outputs.cache_key }}
 
-    - name: Initialization environment (remaining steps)
+    - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
@@ -110,15 +116,15 @@ jobs:
         mkdir project
         cd project
         repo init --depth=1 -u https://github.com/friendlyarm/friendlywrt_manifests -b master-v${{ matrix.VERSION }} \
-                -m rk3568.xml --repo-url=https://github.com/friendlyarm/repo  --no-clone-bundle  # 使用 rk3568 配置
+                -m rk3568.xml --repo-url=https://github.com/friendlyarm/repo --no-clone-bundle
 
         repo sync -c friendlywrt --no-clone-bundle
         repo sync -c configs --no-clone-bundle
         repo sync -c device/common --no-clone-bundle
         repo sync -c device/friendlyelec --no-clone-bundle
         repo sync -c scripts --no-clone-bundle
-        repo sync -c scripts/sd-fuse  --no-clone-bundle
-        repo sync -c toolchain  --no-clone-bundle
+        repo sync -c scripts/sd-fuse --no-clone-bundle
+        repo sync -c toolchain --no-clone-bundle
 
     - name: Apply customizations
       run: |
@@ -133,7 +139,7 @@ jobs:
         DIRNAME=friendlywrt$(echo ${{ matrix.VERSION }}|awk -F . '{print $1}')${SUFFIX}
         CONFIG=rockchip${SUFFIX}
         cat > .current_config.mk <<EOL
-        . device/friendlyelec/rk3568/base.mk  # 使用 rk3568 基础配置
+        . device/friendlyelec/rk3568/base.mk
         TARGET_IMAGE_DIRNAME=${DIRNAME}
         TARGET_FRIENDLYWRT_CONFIG=${CONFIG}
         EOL
@@ -152,140 +158,4 @@ jobs:
       continue-on-error: true
       run: |
         cd project/friendlywrt
-        make -j$(nproc) || make -j1 V=s
-        echo $?
-
-    - name: Check the result and try again
-      if: steps.compile.outcome == 'failure'
-      run: |
-        cd project/friendlywrt
-        make -j1 V=s
-
-    - name: Create rootfs package
-      id: create_rootfs_package
-      run: |
-        cd project
-        source .current_config.mk
-        SUFFIX="-docker"
-        rootfs_filename="rootfs-friendlywrt-${{ matrix.VERSION }}${SUFFIX}.tgz"
-        tar cvzf ../artifact/${rootfs_filename} ${FRIENDLYWRT_SRC}/${FRIENDLYWRT_ROOTFS} \
-              ${FRIENDLYWRT_SRC}/${FRIENDLYWRT_PACKAGE_DIR}
-        echo "rootfs_filename=$rootfs_filename" >> $GITHUB_OUTPUT
-
-    - name: Upload rootfs package
-      uses: svenstaro/upload-release-action@v2
-      with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: ./artifact/${{ steps.create_rootfs_package.outputs.rootfs_filename }}
-        asset_name: ${{ steps.create_rootfs_package.outputs.rootfs_filename }}
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
-        overwrite: true
-
-  build_img:
-    needs: [prepare_release, build_friendlywrt, setup_environment]
-    runs-on: ubuntu-22.04
-    if: github.event.repository.owner.id == github.event.sender.id
-
-    strategy:
-      matrix:
-        VERSION: ['24.10']  # 仅保留 24.10 版本
-        CPU: [rk3568]  # 仅保留 rk3568 CPU
-        SET: [docker]  # 仅保留 docker 设置
-      fail-fast: false
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-
-    - name: Restore environment
-      uses: actions/cache@v3
-      with:
-        path: |
-          /usr/local/bin/repo
-          ~/toolchain
-        key: ${{ needs.setup_environment.outputs.cache_key }}
-
-    - name: Initialization environment (remaining steps)
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        mkdir -p ./artifact
-        echo "cores: $(nproc)"
-
-    - name: Download source
-      run: |
-        mkdir project
-        cd project
-        repo init --depth=1 -u https://github.com/friendlyarm/friendlywrt_manifests -b master-v${{ matrix.VERSION }} \
-                -m rk3568.xml --repo-url=https://github.com/friendlyarm/repo  --no-clone-bundle  # 使用 rk3568 配置
-
-        repo sync -c kernel --no-clone-bundle
-        repo sync -c u-boot --no-clone-bundle
-        repo sync -c rkbin --no-clone-bundle
-        repo sync -c configs --no-clone-bundle
-        repo sync -c device/common --no-clone-bundle
-        repo sync -c device/friendlyelec --no-clone-bundle
-        repo sync -c scripts --no-clone-bundle
-        repo sync -c scripts/sd-fuse  --no-clone-bundle
-        repo sync -c toolchain  --no-clone-bundle
-
-    - name: Download friendlywrt rootfs
-      uses: robinraju/release-downloader@v1.6
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        repository: ${{ github.repository }}
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
-        fileName: "rootfs-friendlywrt-${{ matrix.VERSION }}-docker.tgz"
-
-    - name: Prepare config
-      id: config
-      run: |
-        cd project
-        MODEL=R5S-R5C-Series  # 固定为 R5S-R5C-Series 型号
-        SUFFIX="-docker"
-        FILENAME=${MODEL}-FriendlyWrt-${{ matrix.VERSION }}${SUFFIX}.img
-        DIRNAME=friendlywrt$(echo ${{ matrix.VERSION }}|awk -F . '{print $1}')${SUFFIX}
-        CONFIG=rockchip${SUFFIX}
-        cat > .current_config.mk <<EOL
-        . device/friendlyelec/${{ matrix.CPU }}/base.mk
-        TARGET_IMAGE_DIRNAME=${DIRNAME}
-        TARGET_FRIENDLYWRT_CONFIG=${CONFIG}
-        TARGET_SD_RAW_FILENAME=${FILENAME}
-        EOL
-        echo "img_filename=$FILENAME" >> $GITHUB_OUTPUT
-
-    - name: Unpack friendlywrt rootfs
-      run: |
-        cd project
-        SUFFIX="-docker"
-        tar xvzf "../rootfs-friendlywrt-${{ matrix.VERSION }}${SUFFIX}.tgz"
-
-    - name: Compile uboot and kernel
-      run: |
-        cd project
-        ## If you need to modify the kernel configuration, please edit the script below
-        # source ../scripts/custome_kernel_config.sh
-
-        ./build.sh uboot
-        ./build.sh kernel
-
-        ## 启用 R8125 驱动 (适用于 R5S)
-        ../scripts/3rd/add_r8125.sh
-
-    - name: Build sd image
-      id: build_sd_image
-      run: |
-        cd project
-        ./build.sh sd-img
-        mv out/${{ steps.config.outputs.img_filename }} ../artifact/
-        cd ../artifact/
-        gzip *.img
-
-    - name: Upload image to release
-      uses: svenstaro/upload-release-action@v2
-      with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: ./artifact/${{ steps.config.outputs.img_filename }}.gz
-        asset_name: ${{ steps.config.outputs.img_filename }}.gz
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
-        overwrite: true
+ 
