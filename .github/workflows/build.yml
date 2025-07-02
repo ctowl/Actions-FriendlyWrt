@@ -8,6 +8,7 @@ on:
       reason:
         description: "触发原因"
         required: false
+
 jobs:
   prepare_release:
     runs-on: ubuntu-22.04
@@ -38,8 +39,9 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
     strategy:
       matrix:
-        VERSION: ['23.05', '24.10']
-        SET: [docker, non-docker]
+        VERSION: ['24.10']  # 仅保留24.10版本
+        SET: [docker]       # 仅保留docker配置
+        BOARD: [r5s]        # 仅构建R5S设备
 
     steps:
     - name: Checkout
@@ -91,7 +93,7 @@ jobs:
         cd project
         [ "${{ matrix.SET }}" == "docker" ] && SUFFIX="-docker"
         DIRNAME=friendlywrt$(echo ${{ matrix.VERSION }}|awk -F . '{print $1}')${SUFFIX}
-        CONFIG=rockchip${SUFFIX}
+        CONFIG=rockchip${SUFFIX}-r5s  # 指定R5S配置
         cat > .current_config.mk <<EOL
         . device/friendlyelec/rk3399/base.mk
         TARGET_IMAGE_DIRNAME=${DIRNAME}
@@ -126,7 +128,7 @@ jobs:
         cd project
         source .current_config.mk
         [ "${{ matrix.SET }}" == "docker" ] && SUFFIX="-docker"
-        rootfs_filename="rootfs-friendlywrt-${{ matrix.VERSION }}${SUFFIX}.tgz"
+        rootfs_filename="rootfs-friendlywrt-${{ matrix.VERSION }}${SUFFIX}-r5s.tgz"  # 包含R5S标识
         tar cvzf ../artifact/${rootfs_filename} ${FRIENDLYWRT_SRC}/${FRIENDLYWRT_ROOTFS} \
               ${FRIENDLYWRT_SRC}/${FRIENDLYWRT_PACKAGE_DIR}
         echo "##[set-output name=rootfs_filename;]$rootfs_filename"
@@ -141,10 +143,7 @@ jobs:
         overwrite: true
 
   build_img:
-    needs: [prepare_release,build_friendlywrt]
+    needs: [prepare_release, build_friendlywrt]
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
-
-    strategy:
-      matrix:
-        VERSIO
+    # 若build_img中涉及矩阵配置，需同步去除23.05/non-docker相关参数（当前配置未显示，可根据实际情况补充）
